@@ -22,14 +22,13 @@ export class ThreeSceneManager {
   private currentHeadPose: HeadPose = { x: 0.5, y: 0.5, z: 1 };
   private debugMode: boolean = false;
   private debugHelpers: THREE.Object3D[] = [];
-  private roomObjects: THREE.Object3D[] = [];
 
   constructor(options: ThreeSceneOptions) {
     const width = options.width || options.container.clientWidth;
     const height = options.height || options.container.clientHeight;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a1a);
+    this.scene.background = null;
 
     this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
     this.camera.position.z = 5;
@@ -43,14 +42,15 @@ export class ThreeSceneManager {
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
-      alpha: false
+      alpha: true
     });
+    this.renderer.setClearColor(0x000000, 0);
     this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.domElement.style.pointerEvents = 'none';
     options.container.appendChild(this.renderer.domElement);
 
     this.loadShoeModel();
-    this.createWireframeRoom();
     this.createDebugHelpers();
   }
 
@@ -89,105 +89,6 @@ export class ThreeSceneManager {
     );
   }
 
-  private createWireframeRoom(): void {
-    this.removeWireframeRoom();
-
-    const screenDims = this.offAxisCamera.getScreenDimensions();
-    const roomWidth = screenDims.width;
-    const roomHeight = screenDims.height;
-    const roomDepth = 0.35;
-    const gridDivisions = 8;
-    const gridColor = 0xff8c00;
-
-    const wallMaterial = new THREE.LineBasicMaterial({
-      color: gridColor,
-      transparent: true,
-      opacity: 0.8,
-      depthTest: true,
-      depthWrite: true,
-      linewidth: 8
-    });
-
-    const createGridWall = (width: number, height: number): THREE.LineSegments => {
-      const geometry = new THREE.BufferGeometry();
-      const vertices: number[] = [];
-
-      for (let i = 0; i <= gridDivisions; i++) {
-        const t = i / gridDivisions;
-        vertices.push(-width / 2 + t * width, -height / 2, 0);
-        vertices.push(-width / 2 + t * width, height / 2, 0);
-      }
-
-      for (let i = 0; i <= gridDivisions; i++) {
-        const t = i / gridDivisions;
-        vertices.push(-width / 2, -height / 2 + t * height, 0);
-        vertices.push(width / 2, -height / 2 + t * height, 0);
-      }
-
-      geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-      return new THREE.LineSegments(geometry, wallMaterial);
-    };
-
-    const backWall = createGridWall(roomWidth, roomHeight);
-    backWall.position.z = -roomDepth;
-    this.scene.add(backWall);
-    this.roomObjects.push(backWall);
-
-    const leftWall = createGridWall(roomDepth, roomHeight);
-    leftWall.rotation.y = Math.PI / 2;
-    leftWall.position.x = -roomWidth / 2;
-    leftWall.position.z = -roomDepth / 2;
-    this.scene.add(leftWall);
-    this.roomObjects.push(leftWall);
-
-    const rightWall = createGridWall(roomDepth, roomHeight);
-    rightWall.rotation.y = -Math.PI / 2;
-    rightWall.position.x = roomWidth / 2;
-    rightWall.position.z = -roomDepth / 2;
-    this.scene.add(rightWall);
-    this.roomObjects.push(rightWall);
-
-    const floor = createGridWall(roomWidth, roomDepth);
-    floor.rotation.x = Math.PI / 2;
-    floor.position.y = -roomHeight / 2;
-    floor.position.z = -roomDepth / 2;
-    this.scene.add(floor);
-    this.roomObjects.push(floor);
-
-    const ceiling = createGridWall(roomWidth, roomDepth);
-    ceiling.rotation.x = -Math.PI / 2;
-    ceiling.position.y = roomHeight / 2;
-    ceiling.position.z = -roomDepth / 2;
-    this.scene.add(ceiling);
-    this.roomObjects.push(ceiling);
-
-    const screenFrame = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.PlaneGeometry(roomWidth, roomHeight)),
-      new THREE.LineBasicMaterial({
-        color: 0xff0000,
-        linewidth: 4,
-        depthTest: true,
-        depthWrite: true
-      })
-    );
-    screenFrame.position.z = 0.001;
-    this.scene.add(screenFrame);
-    this.roomObjects.push(screenFrame);
-  }
-
-  private removeWireframeRoom(): void {
-    this.roomObjects.forEach(obj => {
-      this.scene.remove(obj);
-      if (obj instanceof THREE.LineSegments) {
-        obj.geometry.dispose();
-        if (obj.material instanceof THREE.Material) {
-          obj.material.dispose();
-        }
-      }
-    });
-    this.roomObjects = [];
-  }
-
   private createDebugHelpers(): void {
     const axesHelper = new THREE.AxesHelper(0.1);
     axesHelper.visible = false;
@@ -216,7 +117,6 @@ export class ThreeSceneManager {
 
   updateCalibration(calibration: CalibrationData): void {
     this.offAxisCamera.updateCalibration(calibration);
-    this.createWireframeRoom();
   }
 
   updateModelPosition(x: number, y: number, z: number): void {
