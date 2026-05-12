@@ -145,7 +145,9 @@ const ThreeView = forwardRef<ThreeViewHandle, ThreeViewProps>(({ headPose, envir
   return (
     <div
       ref={containerRef}
+
       className="w-full h-full bg-black pointer-events-none"
+
       style={{ touchAction: 'none' }}
     />
   );
