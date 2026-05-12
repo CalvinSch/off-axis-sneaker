@@ -2,9 +2,11 @@ import React, { useRef, useEffect, forwardRef, useImperativeHandle } from 'react
 import { ThreeSceneManager } from '../utils/threeScene';
 import { HeadPose } from '../utils/headPose';
 import { CalibrationData } from '../utils/calibration';
+import type { CameraDebugOffsets } from '../utils/offAxisCamera';
 
 interface ThreeViewProps {
   headPose: HeadPose | null;
+  environmentPlyUrl?: string | null;
 }
 
 export interface ThreeViewHandle {
@@ -16,41 +18,63 @@ export interface ThreeViewHandle {
   getModelPosition: () => { x: number; y: number; z: number };
   getModelScale: () => number;
   getModelRotation: () => { x: number; y: number; z: number };
+  setCameraDebugOffsets: (offsets: CameraDebugOffsets) => void;
+  getCameraDebugOffsets: () => CameraDebugOffsets;
 }
 
-const ThreeView = forwardRef<ThreeViewHandle, ThreeViewProps>(({ headPose }, ref) => {
+const ThreeView = forwardRef<ThreeViewHandle, ThreeViewProps>(({ headPose, environmentPlyUrl }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneManagerRef = useRef<ThreeSceneManager | null>(null);
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-    sceneManagerRef.current = new ThreeSceneManager({
-      container: containerRef.current,
-      width: containerRef.current.clientWidth,
-      height: containerRef.current.clientHeight
+    const MIN = 2;
+
+    const tryCreate = () => {
+      if (sceneManagerRef.current) return;
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w < MIN || h < MIN) return;
+
+      const manager = new ThreeSceneManager({
+        container,
+        width: w,
+        height: h,
+        environmentPlyUrl,
+      });
+      sceneManagerRef.current = manager;
+      manager.start();
+    };
+
+    tryCreate();
+
+    const resizeObserver = new ResizeObserver(() => {
+      tryCreate();
+      if (container.clientWidth >= MIN && container.clientHeight >= MIN && sceneManagerRef.current) {
+        sceneManagerRef.current.resize(container.clientWidth, container.clientHeight);
+      }
     });
+    resizeObserver.observe(container);
 
-    sceneManagerRef.current.start();
-
-    const handleResize = () => {
-      if (containerRef.current && sceneManagerRef.current) {
-        sceneManagerRef.current.resize(
-          containerRef.current.clientWidth,
-          containerRef.current.clientHeight
-        );
+    const handleWindowResize = () => {
+      if (container.clientWidth >= MIN && container.clientHeight >= MIN && sceneManagerRef.current) {
+        sceneManagerRef.current.resize(container.clientWidth, container.clientHeight);
       }
     };
 
-    window.addEventListener('resize', handleResize);
+    window.addEventListener('resize', handleWindowResize);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('resize', handleWindowResize);
+      resizeObserver.disconnect();
       if (sceneManagerRef.current) {
         sceneManagerRef.current.dispose();
+        sceneManagerRef.current = null;
       }
     };
-  }, []);
+  }, [environmentPlyUrl]);
 
   useEffect(() => {
     if (headPose && sceneManagerRef.current) {
@@ -102,12 +126,26 @@ const ThreeView = forwardRef<ThreeViewHandle, ThreeViewProps>(({ headPose }, ref
       }
       return { x: 0, y: -0.628, z: 0 };
     },
+    setCameraDebugOffsets: (offsets: CameraDebugOffsets) => {
+      if (sceneManagerRef.current) {
+        sceneManagerRef.current.setCameraDebugOffsets(offsets);
+      }
+    },
+    getCameraDebugOffsets: () => {
+      if (sceneManagerRef.current) {
+        return sceneManagerRef.current.getCameraDebugOffsets();
+      }
+      return {
+        position: { x: 0, y: 0, z: 0 },
+        lookAt: { x: 0, y: 0, z: 0 },
+      };
+    },
   }));
 
   return (
     <div
       ref={containerRef}
-      className="w-full h-full bg-black"
+      className="w-full h-full bg-black pointer-events-none"
       style={{ touchAction: 'none' }}
     />
   );

@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.cursor/
+
+# Large PLY environment files — host on CDN/object storage for deployment
+public/environments/

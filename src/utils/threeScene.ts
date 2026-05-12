@@ -2,13 +2,15 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { HeadPose } from './headPose';
-import { OffAxisCamera } from './offAxisCamera';
+import { CameraDebugOffsets, OffAxisCamera } from './offAxisCamera';
 import { calibrationManager, CalibrationData } from './calibration';
-
+import { GaussianSplatRenderer, buildSplatCameraParams } from './gaussianSplatRenderer';
 export interface ThreeSceneOptions {
   container: HTMLElement;
   width?: number;
   height?: number;
+  /** Non-empty string loads that URL. Omitted, `null`, or `''` skips PLY (wireframe room only). */
+  environmentPlyUrl?: string | null;
 }
 
 export class ThreeSceneManager {
@@ -17,21 +19,23 @@ export class ThreeSceneManager {
   private renderer: THREE.WebGLRenderer;
   private offAxisCamera: OffAxisCamera;
   private model: THREE.Object3D | null = null;
+  private imagePlanes: THREE.Mesh[] = [];
   private animationFrameId: number | null = null;
   private isRunning = false;
   private currentHeadPose: HeadPose = { x: 0.5, y: 0.5, z: 1 };
   private debugMode: boolean = false;
   private debugHelpers: THREE.Object3D[] = [];
   private roomObjects: THREE.Object3D[] = [];
+  private splatRenderer: GaussianSplatRenderer | null = null;
 
   constructor(options: ThreeSceneOptions) {
     const width = options.width || options.container.clientWidth;
     const height = options.height || options.container.clientHeight;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a1a);
+    this.scene.background = null; // transparent — splat canvas sits behind
 
-    this.camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000);
+    this.camera = new THREE.PerspectiveCamera(75, width / height, 0.01, 1000);
     this.camera.position.z = 5;
 
     const calibration = calibrationManager.getCalibration();
@@ -43,15 +47,75 @@ export class ThreeSceneManager {
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
-      alpha: false
+      alpha: true,  // transparent so splat canvas shows through
     });
     this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.domElement.style.pointerEvents = 'none';
     options.container.appendChild(this.renderer.domElement);
 
     this.loadShoeModel();
+    this.loadImagePlane('/models/ringo - shea.png',  0.2, -0.5, 0,  0.25, -0.05);
+    this.loadImagePlane('/models/Beatles - Shea.png', 0.45, -0.3, 1, 0,    0);
     this.createWireframeRoom();
     this.createDebugHelpers();
+
+    const raw = options.environmentPlyUrl;
+    const plyUrl = typeof raw === 'string' && raw.length > 0 ? raw : null;
+    if (plyUrl) {
+      this.initSplatRenderer(options.container, plyUrl);
+    }
+  }
+
+  private initSplatRenderer(container: HTMLElement, url: string): void {
+    try {
+      this.splatRenderer = new GaussianSplatRenderer(container);
+      this.splatRenderer
+        .loadPly(url, 1_000_000, () => this.removeWireframeRoom())
+        .catch((err) => console.error('[SplatRenderer] load failed:', err));
+    } catch (err) {
+      console.error('[SplatRenderer] init failed:', err);
+    }
+  }
+
+  private loadImagePlane(url: string, height: number, depth: number, renderOrder: number, x = 0, y = 0): void {
+    new THREE.TextureLoader().load(
+      encodeURI(url),
+      (texture) => {
+        const imgW = texture.image.naturalWidth  || texture.image.width  || 1;
+        const imgH = texture.image.naturalHeight || texture.image.height || 1;
+        const geo = new THREE.PlaneGeometry(height * (imgW / imgH), height);
+        const mat = new THREE.ShaderMaterial({
+          uniforms: { map: { value: texture } },
+          vertexShader: `
+            varying vec2 vUv;
+            void main() {
+              vUv = uv;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform sampler2D map;
+            varying vec2 vUv;
+            void main() {
+              vec4 c = texture2D(map, vUv);
+              if (c.r > 0.93 && c.g > 0.93 && c.b > 0.93) discard;
+              gl_FragColor = c;
+            }
+          `,
+          side: THREE.DoubleSide,
+          transparent: true,
+          depthWrite: false,
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(x, y, depth);
+        mesh.renderOrder = renderOrder;
+        this.imagePlanes.push(mesh);
+        this.scene.add(mesh);
+      },
+      undefined,
+      (err) => console.error('[ImagePlane] failed to load', url, err),
+    );
   }
 
   private loadShoeModel(): void {
@@ -216,7 +280,17 @@ export class ThreeSceneManager {
 
   updateCalibration(calibration: CalibrationData): void {
     this.offAxisCamera.updateCalibration(calibration);
-    this.createWireframeRoom();
+    if (!this.splatRenderer) {
+      this.createWireframeRoom();
+    }
+  }
+
+  setCameraDebugOffsets(offsets: CameraDebugOffsets): void {
+    this.offAxisCamera.setCameraDebugOffsets(offsets);
+  }
+
+  getCameraDebugOffsets(): CameraDebugOffsets {
+    return this.offAxisCamera.getCameraDebugOffsets();
   }
 
   updateModelPosition(x: number, y: number, z: number): void {
@@ -278,6 +352,21 @@ export class ThreeSceneManager {
       this.debugHelpers[1].position.set(worldPos.x, worldPos.y, worldPos.z);
     }
 
+    // Splat rendering: update camera matrices and render to the background canvas
+    if (this.splatRenderer) {
+      this.camera.updateMatrixWorld();
+      // Use the actual GL buffer dimensions (set by Three.js setSize × setPixelRatio)
+      const W = this.renderer.domElement.width;
+      const H = this.renderer.domElement.height;
+      if (W > 0 && H > 0) {
+        const params = buildSplatCameraParams(
+          this.camera, W, H, this.splatRenderer.sceneModelMatrix
+        );
+        this.splatRenderer.updateCamera(params);
+        this.splatRenderer.render();
+      }
+    }
+
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -297,13 +386,32 @@ export class ThreeSceneManager {
   }
 
   resize(width: number, height: number): void {
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    if (width > 0 && height > 0) {
+      this.camera.aspect = width / height;
+    }
     this.renderer.setSize(width, height);
+    if (this.splatRenderer) {
+      // Sync to the actual buffer dimensions Three.js just set
+      this.splatRenderer.resize(this.renderer.domElement.width, this.renderer.domElement.height);
+    }
   }
 
   dispose(): void {
     this.stop();
+
+    this.removeWireframeRoom();
+
+    if (this.splatRenderer) {
+      this.splatRenderer.dispose();
+      this.splatRenderer = null;
+    }
+
+    for (const plane of this.imagePlanes) {
+      plane.geometry.dispose();
+      (plane.material as THREE.Material).dispose();
+      this.scene.remove(plane);
+    }
+    this.imagePlanes = [];
 
     if (this.model) {
       this.model.traverse((child) => {

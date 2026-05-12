@@ -8,6 +8,12 @@ export interface HeadPositionWorld {
   z: number;
 }
 
+/** Added on top of head-derived pose; look-at offsets apply to the default target (eye.x, eye.y, 0). */
+export interface CameraDebugOffsets {
+  position: { x: number; y: number; z: number };
+  lookAt: { x: number; y: number; z: number };
+}
+
 export class OffAxisCamera {
   private camera: THREE.PerspectiveCamera;
   private calibration: CalibrationData;
@@ -15,6 +21,10 @@ export class OffAxisCamera {
   private screenHeightWorld: number;
   private nearPlane: number = 0.05;
   private farPlane: number = 1000;
+  private cameraDebugOffsets: CameraDebugOffsets = {
+    position: { x: 0, y: 0, z: 0 },
+    lookAt: { x: 0, y: 0, z: 0 },
+  };
 
   constructor(camera: THREE.PerspectiveCamera, calibration: CalibrationData) {
     this.camera = camera;
@@ -85,15 +95,40 @@ export class OffAxisCamera {
     this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
   }
 
+  setCameraDebugOffsets(offsets: CameraDebugOffsets): void {
+    this.cameraDebugOffsets = {
+      position: { ...offsets.position },
+      lookAt: { ...offsets.lookAt },
+    };
+  }
+
+  getCameraDebugOffsets(): CameraDebugOffsets {
+    return {
+      position: { ...this.cameraDebugOffsets.position },
+      lookAt: { ...this.cameraDebugOffsets.lookAt },
+    };
+  }
+
+  private effectiveEye(worldPos: HeadPositionWorld): HeadPositionWorld {
+    const p = this.cameraDebugOffsets.position;
+    return {
+      x: worldPos.x + p.x,
+      y: worldPos.y + p.y,
+      z: worldPos.z + p.z,
+    };
+  }
+
   setCameraPosition(headPosition: HeadPositionWorld): void {
+    const l = this.cameraDebugOffsets.lookAt;
     this.camera.position.set(headPosition.x, headPosition.y, headPosition.z);
-    this.camera.lookAt(headPosition.x, headPosition.y, 0);
+    this.camera.lookAt(headPosition.x + l.x, headPosition.y + l.y, l.z);
   }
 
   updateFromHeadPose(headPose: HeadPose): void {
     const worldPos = this.headPoseToWorldPosition(headPose);
-    this.setCameraPosition(worldPos);
-    this.updateProjectionMatrix(worldPos);
+    const eye = this.effectiveEye(worldPos);
+    this.setCameraPosition(eye);
+    this.updateProjectionMatrix(eye);
   }
 
   getScreenDimensions(): { width: number; height: number } {

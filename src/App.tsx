@@ -4,8 +4,14 @@ import FaceMeshView from './components/FaceMeshView';
 import ThreeView, { ThreeViewHandle } from './components/ThreeView';
 import CalibrationWizard from './components/CalibrationWizard';
 import ShoeControlPanel from './components/ShoeControlPanel';
+import CameraDebugPanel from './components/CameraDebugPanel';
 import { HeadPose, HeadPoseTracker } from './utils/headPose';
 import { calibrationManager, CalibrationData } from './utils/calibration';
+import type { CameraDebugOffsets } from './utils/offAxisCamera';
+import { DEFAULT_ENVIRONMENT_PLY_URL } from './constants/environmentPly';
+
+/** PLY at `public/environments/scene.ply`. Set to `null` to use the wireframe room only. */
+const THREE_ENVIRONMENT_PLY: string | null = DEFAULT_ENVIRONMENT_PLY_URL;
 
 function App() {
   const [isCdnAvailable, setIsCdnAvailable] = useState(true);
@@ -18,6 +24,10 @@ function App() {
   const [shoePosition, setShoePosition] = useState({ x: 0, y: -0.09, z: -0.03 });
   const [shoeScale, setShoeScale] = useState(0.071);
   const [shoeRotation, setShoeRotation] = useState({ x: 0, y: -0.628, z: 0 });
+  const [cameraDebugOffsets, setCameraDebugOffsets] = useState<CameraDebugOffsets>({
+    position: { x: 0, y: 0, z: 0 },
+    lookAt: { x: 0, y: 0, z: 0 },
+  });
   const headPoseTrackerRef = useRef(new HeadPoseTracker(0.3));
   const threeViewRef = useRef<ThreeViewHandle>(null);
 
@@ -145,6 +155,13 @@ function App() {
     }
   };
 
+  const handleCameraDebugOffsetsChange = useCallback((offsets: CameraDebugOffsets) => {
+    setCameraDebugOffsets(offsets);
+    if (threeViewRef.current) {
+      threeViewRef.current.setCameraDebugOffsets(offsets);
+    }
+  }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       if (threeViewRef.current) {
@@ -174,6 +191,7 @@ function App() {
           <ThreeView
             headPose={currentHeadPose}
             ref={threeViewRef}
+            environmentPlyUrl={THREE_ENVIRONMENT_PLY}
           />
         </div>
 
@@ -185,6 +203,13 @@ function App() {
           initialScale={shoeScale}
           initialRotation={shoeRotation}
         />
+
+        {debugMode && (
+          <CameraDebugPanel
+            onOffsetsChange={handleCameraDebugOffsetsChange}
+            initialOffsets={cameraDebugOffsets}
+          />
+        )}
 
         <div className="absolute bottom-4 right-4 z-10 rounded-lg overflow-hidden shadow-2xl border-2 border-white">
           <div className="w-64 h-48">
