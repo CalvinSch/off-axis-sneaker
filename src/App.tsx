@@ -1,13 +1,27 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Maximize, Minimize, Settings, Bug } from 'lucide-react';
+import Webcam from 'react-webcam';
 import FaceMeshView from './components/FaceMeshView';
 import ThreeView, { ThreeViewHandle } from './components/ThreeView';
 import CalibrationWizard from './components/CalibrationWizard';
 import ShoeControlPanel from './components/ShoeControlPanel';
 import { HeadPose, HeadPoseTracker } from './utils/headPose';
 import { calibrationManager, CalibrationData } from './utils/calibration';
+import { VIDEO_INPUT_DEVICE_STORAGE_KEY } from './constants/cameraStorage';
 
 function App() {
+  const sharedWebcamRef = useRef<Webcam>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>(() => {
+    try {
+      return localStorage.getItem(VIDEO_INPUT_DEVICE_STORAGE_KEY) || undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  const [videoInputs, setVideoInputs] = useState<MediaDeviceInfo[]>([]);
+  const [webcamReady, setWebcamReady] = useState(false);
+  const [webcamError, setWebcamError] = useState<string | null>(null);
+
   const [isCdnAvailable, setIsCdnAvailable] = useState(true);
   const [isCheckingCdn, setIsCheckingCdn] = useState(true);
   const [currentHeadPose, setCurrentHeadPose] = useState<HeadPose | null>(null);
@@ -20,6 +34,33 @@ function App() {
   const [shoeRotation, setShoeRotation] = useState({ x: 0, y: -0.628, z: 0 });
   const headPoseTrackerRef = useRef(new HeadPoseTracker(0.3));
   const threeViewRef = useRef<ThreeViewHandle>(null);
+
+  useEffect(() => {
+    setWebcamReady(false);
+  }, [selectedDeviceId]);
+
+  const refreshVideoInputs = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      setVideoInputs(devices.filter((d) => d.kind === 'videoinput'));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  const handleWebcamUserMedia = useCallback(() => {
+    setWebcamError(null);
+    setWebcamReady(true);
+    void refreshVideoInputs();
+  }, [refreshVideoInputs]);
+
+  const handleWebcamUserMediaError = useCallback((error: string | DOMException) => {
+    setWebcamReady(false);
+    const message =
+      error instanceof DOMException ? error.message : typeof error === 'string' ? error : 'Camera error';
+    setWebcamError(message);
+    console.error('Webcam error:', error);
+  }, []);
 
   useEffect(() => {
     const checkCdnAvailability = async () => {
@@ -59,14 +100,16 @@ function App() {
   const handleHeadPoseUpdate = useCallback((rawPose: HeadPose | null) => {
     if (rawPose) {
       const smoothedPose = headPoseTrackerRef.current.extractHeadPoseFromLandmarks([
-        Array(468).fill(null).map((_, i) => {
-          if (i === 133) return { x: rawPose.x - 0.05, y: rawPose.y, z: 0 };
-          if (i === 362) return { x: rawPose.x + 0.05, y: rawPose.y, z: 0 };
-          if (i === 1) return { x: rawPose.x, y: rawPose.y, z: 0 };
-          if (i === 33) return { x: rawPose.x - 0.08, y: rawPose.y, z: 0 };
-          if (i === 263) return { x: rawPose.x + 0.08, y: rawPose.y, z: 0 };
-          return { x: 0, y: 0, z: 0 };
-        })
+        Array(468)
+          .fill(null)
+          .map((_, i) => {
+            if (i === 133) return { x: rawPose.x - 0.05, y: rawPose.y, z: 0 };
+            if (i === 362) return { x: rawPose.x + 0.05, y: rawPose.y, z: 0 };
+            if (i === 1) return { x: rawPose.x, y: rawPose.y, z: 0 };
+            if (i === 33) return { x: rawPose.x - 0.08, y: rawPose.y, z: 0 };
+            if (i === 263) return { x: rawPose.x + 0.08, y: rawPose.y, z: 0 };
+            return { x: 0, y: 0, z: 0 };
+          }),
       ]);
       if (smoothedPose) {
         setCurrentHeadPose(smoothedPose);
@@ -159,9 +202,51 @@ function App() {
     return () => clearTimeout(timer);
   }, []);
 
+  const handleDeviceChange = (deviceId: string) => {
+    if (!deviceId) {
+      setSelectedDeviceId(undefined);
+      try {
+        localStorage.removeItem(VIDEO_INPUT_DEVICE_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
+    setSelectedDeviceId(deviceId);
+    try {
+      localStorage.setItem(VIDEO_INPUT_DEVICE_STORAGE_KEY, deviceId);
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col relative">
-      <main className="flex-1 relative">
+    <div className="min-h-screen bg-black flex flex-col relative">
+      <Webcam
+        key={selectedDeviceId ?? 'default'}
+        ref={sharedWebcamRef}
+        audio={false}
+        mirrored
+        screenshotFormat="image/jpeg"
+        onUserMedia={handleWebcamUserMedia}
+        onUserMediaError={handleWebcamUserMediaError}
+        videoConstraints={
+          selectedDeviceId
+            ? {
+                deviceId: { exact: selectedDeviceId },
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              }
+            : {
+                facingMode: 'user',
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+              }
+        }
+        className="fixed inset-0 z-0 h-full w-full object-cover pointer-events-none"
+      />
+
+      <main className="flex-1 relative z-10 min-h-screen">
         {!isCheckingCdn && !isCdnAvailable && (
           <div className="absolute top-4 left-4 right-4 z-30 max-w-2xl mx-auto p-3 bg-yellow-50 text-yellow-800 rounded-md">
             <p className="text-sm">
@@ -170,29 +255,58 @@ function App() {
           </div>
         )}
 
-        <div className="absolute inset-0">
-          <ThreeView
-            headPose={currentHeadPose}
-            ref={threeViewRef}
+        {webcamError && (
+          <div className="absolute top-4 left-4 right-4 z-30 max-w-2xl mx-auto p-3 bg-red-900/90 text-red-50 rounded-md mt-16">
+            <p className="text-sm font-medium">Camera</p>
+            <p className="text-xs mt-1">{webcamError}</p>
+          </div>
+        )}
+
+        <div className="absolute top-4 right-4 z-40 max-w-xs">
+          <label htmlFor="video-input-select" className="sr-only">
+            Camera
+          </label>
+          <select
+            id="video-input-select"
+            className="w-full text-xs bg-black/60 text-white border border-white/30 rounded px-2 py-1.5 backdrop-blur-sm"
+            value={selectedDeviceId ?? ''}
+            onChange={(e) => handleDeviceChange(e.target.value)}
+          >
+            <option value="">Default camera</option>
+            {videoInputs.map((d) => (
+              <option key={d.deviceId} value={d.deviceId}>
+                {d.label || `Camera ${d.deviceId.slice(0, 8)}…`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="absolute inset-0 pointer-events-none">
+          <ThreeView headPose={currentHeadPose} ref={threeViewRef} />
+        </div>
+
+        <div className="pointer-events-auto">
+          <ShoeControlPanel
+            onPositionChange={handleShoePositionChange}
+            onScaleChange={handleShoeScaleChange}
+            onRotationChange={handleShoeRotationChange}
+            initialPosition={shoePosition}
+            initialScale={shoeScale}
+            initialRotation={shoeRotation}
           />
         </div>
 
-        <ShoeControlPanel
-          onPositionChange={handleShoePositionChange}
-          onScaleChange={handleShoeScaleChange}
-          onRotationChange={handleShoeRotationChange}
-          initialPosition={shoePosition}
-          initialScale={shoeScale}
-          initialRotation={shoeRotation}
-        />
-
-        <div className="absolute bottom-4 right-4 z-10 rounded-lg overflow-hidden shadow-2xl border-2 border-white">
+        <div className="absolute bottom-4 right-4 z-20 rounded-lg overflow-hidden shadow-2xl border-2 border-white pointer-events-auto">
           <div className="w-64 h-48">
-            <FaceMeshView onHeadPoseUpdate={handleHeadPoseUpdate} />
+            <FaceMeshView
+              sharedWebcamRef={sharedWebcamRef}
+              isWebcamReady={webcamReady}
+              onHeadPoseUpdate={handleHeadPoseUpdate}
+            />
           </div>
         </div>
 
-        <div className="absolute bottom-4 left-4 z-10 flex flex-col gap-2">
+        <div className="absolute bottom-4 left-4 z-20 flex flex-col gap-2 pointer-events-auto">
           <button
             onClick={toggleFullscreen}
             className="p-1.5 bg-black bg-opacity-50 hover:bg-opacity-70 text-white rounded transition-colors backdrop-blur-sm"
